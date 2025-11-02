@@ -2,7 +2,7 @@ import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import LabelEncoder
 import soundfile as sf
 from pydub import AudioSegment
 import joblib
