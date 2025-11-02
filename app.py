@@ -1,68 +1,126 @@
 import streamlit as st
+from audio_recorder_streamlit import audio_recorder
 import numpy as np
-import sounddevice as sd
-from scipy.io.wavfile import write
-import tempfile
-import tsfel
 import pandas as pd
-import pickle
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+import soundfile as sf
+from pydub import AudioSegment
+import joblib
+import librosa
+import os
+import io
+import tsfel
 
-# === LOAD MODEL DAN SCALER ===
-model = pickle.load(open("model_knn.pkl", "rb"))
-scaler = pickle.load(open("scaler.pkl", "rb"))
-feature_names = pickle.load(open("feature_names.pkl", "rb"))
-
-st.title("🔊 Klasifikasi Suara Buka / Tutup")
+st.title("🎙️ Voice Classifier: Buka / Tutup")
 st.markdown("Rekam suaramu lalu biarkan model KNN menebak apakah itu **'buka'** atau **'tutup'**.")
 
-# === STEP 1: Rekam Suara ===
-duration = 3
-if st.button("🎙️ Rekam Sekarang"):
-    st.info("Merekam... silakan ucapkan kata 'buka' atau 'tutup'")
-    fs = 44100  # sample rate
-    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
-    sd.wait()
-    st.success("✅ Rekaman selesai!")
+model_path = os.path.join(os.path.dirname(__file__), "model_knn.pkl")
+scaler_path = os.path.join(os.path.dirname(__file__), "scaler.pkl")
+feature_names_path = os.path.join(os.path.dirname(__file__), "feature_names.pkl")
 
-    # Simpan ke file sementara
-    temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    write(temp_wav.name, fs, recording)
+model = joblib.load(model_path)
+scaler = joblib.load(scaler_path)
+feature_names = joblib.load(feature_names_path)
 
-    st.audio(temp_wav.name, format="audio/mp3")
+le = LabelEncoder()
+y_encoded = le.fit_transform(["buka", "tutup"])
 
-    # === STEP 2: Ekstraksi Fitur TSFEL ===
-    st.write("⏳ Mengekstraksi fitur suara...")
-    features = tsfel.time_series_features_extractor(
-        tsfel.get_features_by_domain(),
-        recording.flatten(),
-        fs=fs
+if "last_audio" not in st.session_state:
+    st.session_state.last_audio = None
+
+mode = "🎙️ Rekam langsung"
+
+def analyze_audio(audio_bytes, source="rekaman"):
+    try:
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
+        samples = np.array(audio_segment.get_array_of_samples(), dtype=np.float32)
+
+        if audio_segment.sample_width == 2:
+            samples = samples / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples / 2147483648.0
+
+        if audio_segment.channels == 2:
+            samples = samples.reshape((-1, 2)).mean(axis=1)
+
+        sr = audio_segment.frame_rate
+
+        # Resample ke 16kHz jika perlu
+        if sr != 16000:
+            samples = librosa.resample(samples, orig_sr=sr, target_sr=16000)
+            sr = 16000
+        
+        # Normalisasi
+        samples = samples / (np.max(np.abs(samples)) + 1e-8)
+
+        # Simpan untuk preview
+        sf.write("temp_audio.wav", samples, sr)
+        st.audio("temp_audio.wav", format="audio/wav")
+
+        st.write("⏳ Mengekstraksi fitur...")
+        cfg = tsfel.get_features_by_domain("statistical")
+        features = tsfel.time_series_features_extractor(cfg, samples, fs=sr, verbose=0)
+
+        # Pastikan kolom sama dengan feature_names
+        features = features.reindex(columns=feature_names, fill_value=0)
+
+        # === Prediksi ===
+        label_map = {0: "buka", 1: "tutup"}
+        X = scaler.transform(features)
+        prediction = model.predict(X)[0]
+        probs = model.predict_proba(X)[0]  # <-- Tambahan
+
+        epsilon = 0.05  # semakin besar, semakin lembut
+        probs = (probs + epsilon) / (probs + epsilon).sum()
+        label = label_map.get(prediction, "Tidak diketahui, silahkan rekam ulang")
+
+        st.success(f"🎯 Hasil prediksi: **{label}**")
+
+        # --- 📊 Tampilkan probabilitas ---
+        prob_df = pd.DataFrame({
+            "Label": ["buka", "tutup"],
+            "Probabilitas": [probs[0], probs[1]]
+        })
+        # st.bar_chart(prob_df.set_index("Label"))
+
+        st.write("Nilai probabilitas:")
+        st.write(f"🟢 **Buka:** {probs[0]*100:.2f}%")
+        st.write(f"🔵 **Tutup:** {probs[1]*100:.2f}%")
+
+    except Exception as e:
+        st.error(f"❌ Error saat analisis: {e}")
+
+if mode == "🎙️ Rekam langsung":
+    st.info("🎙️ Tekan tombol mikrofon di bawah, ucapkan **'BUKA'** atau **'TUTUP'** dengan jelas, lalu tekan stop.")
+    
+    # Audio recorder widget
+    audio_bytes = audio_recorder(
+        text="Klik untuk merekam",
+        recording_color="#e74c3c",
+        neutral_color="#3498db",
+        icon_name="microphone",
+        icon_size="2x",
+        pause_threshold=2.0,
+        sample_rate=16000
     )
-
-    features = features.reindex(columns=feature_names, fill_value=0)
-
-    # === STEP 3: Normalisasi & Prediksi ===
-    label_map = {0: "buka", 1: "tutup"}
-    X = scaler.transform(features)
-
-    # --- 🔮 Prediksi dan Probabilitas ---
-    prediction = model.predict(X)[0]
-    probs = model.predict_proba(X)[0]  # <-- Tambahan
-
-    epsilon = 0.05  # semakin besar, semakin lembut
-    probs = (probs + epsilon) / (probs + epsilon).sum()
-
-    label = label_map.get(prediction, "Tidak diketahui, silahkan rekam ulang")
-
-    st.success(f"🎯 Hasil prediksi: **{label}**")
-
-    # --- 📊 Tampilkan probabilitas ---
-    prob_df = pd.DataFrame({
-        "Label": ["buka", "tutup"],
-        "Probabilitas": [probs[0], probs[1]]
-    })
-    # st.bar_chart(prob_df.set_index("Label"))
-
-    st.write("### Nilai probabilitas:")
-    st.write(f"🟢 **Buka:** {probs[0]*100:.2f}%")
-    st.write(f"🔵 **Tutup:** {probs[1]*100:.2f}%")
+    
+    # Jika ada audio baru yang direkam
+    if audio_bytes:
+        # Cek apakah ini audio baru (berbeda dari sebelumnya)
+        if audio_bytes != st.session_state.last_audio:
+            st.session_state.last_audio = audio_bytes
+            
+            st.success("✅ Audio berhasil direkam! Menganalisis...")
+            
+            # Analisis otomatis
+            with st.spinner("🔄 Memproses audio..."):
+                analyze_audio(audio_bytes, source="rekaman")
+        else:
+            # Audio sama dengan sebelumnya, tampilkan tombol analisis ulang
+            st.info("ℹ️ Audio sudah dianalisis. Rekam ulang untuk prediksi baru.")
+            
+            if st.button("🔄 Analisis Ulang", type="secondary"):
+                with st.spinner("🔄 Memproses audio..."):
+                    analyze_audio(audio_bytes, source="rekaman")
+    else:
+        st.info("👆 Klik tombol mikrofon di atas untuk mulai merekam")
