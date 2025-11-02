@@ -1,9 +1,10 @@
-streamlit==1.37.0
-librosa==0.10.2.post1
+streamlit
+audio-recorder-streamlit
 numpy
+pandas
 scikit-learn
 joblib
+librosa
 soundfile
-sounddevice
 pydub
-audio-recorder-streamlit
+tsfel
