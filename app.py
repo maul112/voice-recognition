@@ -65,7 +65,7 @@ def analyze_audio(audio_bytes, source="rekaman"):
         features = features.reindex(columns=feature_names, fill_value=0)
 
         # === Prediksi ===
-        label_map = {0: "buka", 1: "tutup"}
+        label_map = {0: 'buka_dio', 1: 'buka_maulana', 2: 'tutup_dio', 3: 'tutup_maulana'}
         X = scaler.transform(features)
         prediction = model.predict(X)[0]
         probs = model.predict_proba(X)[0]  # <-- Tambahan
@@ -74,18 +74,20 @@ def analyze_audio(audio_bytes, source="rekaman"):
         probs = (probs + epsilon) / (probs + epsilon).sum()
         label = label_map.get(prediction, "Tidak diketahui, silahkan rekam ulang")
 
-        st.success(f"🎯 Hasil prediksi: **{label}**")
+        st.success(f"🎯 Hasil prediksi: **{label.replace("_", " ")}**")
 
         # --- 📊 Tampilkan probabilitas ---
         prob_df = pd.DataFrame({
-            "Label": ["buka", "tutup"],
-            "Probabilitas": [probs[0], probs[1]]
+            "Label": label_map.values(),
+            "Probabilitas": [probs[0], probs[1], probs[2], probs[3]]
         })
         # st.bar_chart(prob_df.set_index("Label"))
 
         st.write("Nilai probabilitas:")
-        st.write(f"🟢 **Buka:** {probs[0]*100:.2f}%")
-        st.write(f"🔵 **Tutup:** {probs[1]*100:.2f}%")
+        st.write(f"🟢 **Buka Dio:** {probs[0]*100:.2f}%")
+        st.write(f"🟢 **Buka Maulana:** {probs[1]*100:.2f}%")
+        st.write(f"🔵 **Tutup Dio:** {probs[2]*100:.2f}%")
+        st.write(f"🔵 **Tutup Maulana:** {probs[3]*100:.2f}%")
 
     except Exception as e:
         st.error(f"❌ Error saat analisis: {e}")
